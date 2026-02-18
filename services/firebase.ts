@@ -24,12 +24,12 @@ import { AppData } from "../types";
  */
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAs-Placeholder-Key", // REPLACE ME
-  authDomain: "chittrack-pro.firebaseapp.com",
-  projectId: "chittrack-pro",
-  storageBucket: "chittrack-pro.appspot.com",
-  messagingSenderId: "123456789",
-  appId: "1:123456789:web:abcdef"
+  apiKey: "AIzaSyA32u6hSd6mj4oJvlsa-EHMReKx0im2e80", // REPLACE ME
+  authDomain: "chitpro-9affd.firebaseapp.com",
+  projectId: "chitpro-9affd",
+  storageBucket: "chitpro-9affd.firebasestorage.app",
+  messagingSenderId: "7543441875879",
+  appId: "1:754344187587:web:bbf672119ace7551153476"
 };
 
 const isPlaceholder = firebaseConfig.apiKey.includes("Placeholder");

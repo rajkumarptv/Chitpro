@@ -24,12 +24,13 @@ import { AppData } from "../types";
  */
 
 const firebaseConfig = {
-  apiKey: "AIzaSyA32u6hSd6mj4oJvlsa-EHMReKx0im2e80", // REPLACE ME
+  apiKey: "AIzaSyA32u6hSd6mj4oJvlsa-EHMReKx0im2e80",
   authDomain: "chitpro-9affd.firebaseapp.com",
   projectId: "chitpro-9affd",
   storageBucket: "chitpro-9affd.firebasestorage.app",
-  messagingSenderId: "7543441875879",
-  appId: "1:754344187587:web:bbf672119ace7551153476"
+  messagingSenderId: "754344187587",
+  appId: "1:754344187587:web:bbf672119ace7551153476",
+  measurementId: "G-SZ6RP1RSL9"
 };
 
 const isPlaceholder = firebaseConfig.apiKey.includes("Placeholder");

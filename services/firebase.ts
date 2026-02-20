@@ -11,17 +11,6 @@ import {
 } from "firebase/firestore";
 import { AppData } from "../types";
 
-/**
- * ATTENTION: YOU MUST REPLACE THESE PLACEHOLDERS WITH YOUR OWN FIREBASE PROJECT CREDENTIALS
- * 1. Go to https://console.firebase.google.com/
- * 2. Create a project.
- * 3. Add a Web App.
- * 4. Copy the firebaseConfig and paste it below.
- * 5. Enable Firestore Database.
- * 6. Set Security Rules to:
- *    allow read, write: if true; (for testing only!)
- */
-
 const firebaseConfig = {
   apiKey: "AIzaSyA32u6hSd6mj4oJvlsa-EHMReKx0im2e80",
   authDomain: "chitpro-9affd.firebaseapp.com",
@@ -34,18 +23,9 @@ const firebaseConfig = {
 
 const isPlaceholder = firebaseConfig.apiKey.includes("Placeholder");
 
-if (isPlaceholder) {
-  console.warn("Firebase is in PLACEHOLDER mode. Cloud sync is disabled. Update services/firebase.ts with your credentials.");
-} else {
-  console.log("Firebase initialized with custom configuration.");
-}
-
 const app = initializeApp(firebaseConfig);
 
-// FIX #1: Use initializeFirestore with persistentLocalCache instead of the
-// deprecated enableMultiTabIndexedDbPersistence(). This is the correct API
-// for Firebase SDK v9.6+ and properly enables offline persistence with
-// multi-tab support without needing a separate function call.
+// Use modern persistentLocalCache API (Firebase v10+)
 const db = isPlaceholder
   ? initializeFirestore(app, {})
   : initializeFirestore(app, {
@@ -68,15 +48,9 @@ export const subscribeToChitData = (
   return onSnapshot(
     doc(db, "groups", CHIT_DOC_ID),
     (snapshot) => {
-      // FIX #3: Handle both existing and non-existing document states.
-      // Previously, if the doc didn't exist yet, onUpdate was never called,
-      // causing the spinner to hang until the 5s timeout.
       if (snapshot.exists()) {
         onUpdate(snapshot.data() as AppData);
       } else {
-        // Document doesn't exist yet (fresh setup) — signal null so
-        // the app knows the cloud is reachable but has no data yet.
-        console.log("No cloud document found. Fresh setup — local data will be used.");
         onUpdate(null);
       }
     },
@@ -85,9 +59,7 @@ export const subscribeToChitData = (
         error.name === "AbortError" ||
         error.message?.includes("aborted") ||
         error.code === "cancelled"
-      ) {
-        return; // Silently ignore aborted requests
-      }
+      ) return;
       console.error("Firebase Sync Error:", error);
       onError(error);
     }
@@ -103,8 +75,7 @@ export const saveChitData = async (data: AppData) => {
       error.name === "AbortError" ||
       error.message?.includes("aborted") ||
       error.code === "cancelled"
-    )
-      return;
+    ) return;
     console.error("Firebase Save Error:", error);
     throw error;
   }
@@ -121,9 +92,8 @@ export const getInitialData = async (): Promise<AppData | null> => {
       error.name === "AbortError" ||
       error.message?.includes("aborted") ||
       error.code === "cancelled"
-    )
-      return null;
-    console.warn("Failed to get initial data from cloud, checking cache...", error.message);
+    ) return null;
+    console.warn("Failed to get initial data:", error.message);
     return null;
   }
 };

@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
 import { PaymentGrid } from './components/PaymentGrid';
@@ -9,7 +9,7 @@ import { ChitSettings } from './components/ChitSettings';
 import { Login } from './components/Login';
 import { AppData, PaymentStatus, Member, UserRole, AuthState, PaymentMethod } from './types';
 import { calculatePaymentDate } from './utils/dateUtils';
-import { subscribeToChitData, saveChitData, getInitialData } from './services/firebase';
+import { subscribeToChitData, saveChitData } from './services/firebase';
 import { Loader2, AlertTriangle, ShieldAlert, Database, ExternalLink, RefreshCw } from 'lucide-react';
 
 const STORAGE_KEY = 'chittrack_local_fallback';
@@ -44,19 +44,60 @@ const App: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'dashboard' | 'payments' | 'members' | 'ai' | 'settings'>('dashboard');
 
+  // FIX #5: Use a ref to track syncing state inside setTimeout to avoid
+  // stale closure bug where isSyncing always reads its initial value.
+  const isSyncingRef = useRef(true);
+
   useEffect(() => {
+    isSyncingRef.current = true;
     setIsSyncing(true);
+
+    // Safety timeout: If cloud doesn't respond in 8s, stop the spinner
+    const syncTimeout = setTimeout(() => {
+      if (isSyncingRef.current) {
+        isSyncingRef.current = false;
+        setIsSyncing(false);
+        setSyncError("Cloud slow - using local data");
+      }
+    }, 8000);
+
+    // FIX #2: Remove the separate getInitialData() call that was causing a
+    // race condition. onSnapshot already fires once with the current document
+    // state, so calling getInitialData() in parallel caused data overwrites.
     const unsubscribe = subscribeToChitData(
       (newData) => {
-        setData(newData);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(newData));
+        clearTimeout(syncTimeout);
+        isSyncingRef.current = false;
         setIsSyncing(false);
         setSyncError(null);
+
+        // FIX #3: newData can now be null when the Firestore doc doesn't exist yet
+        // (fresh project). In that case, keep local data and save it up to the cloud.
+        if (newData !== null) {
+          setData(newData);
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(newData));
+        } else {
+          // Cloud is reachable but doc is empty — push local data up
+          const local = localStorage.getItem(STORAGE_KEY);
+          const localData: AppData = local ? JSON.parse(local) : INITIAL_DATA;
+          saveChitData(localData).catch(console.warn);
+        }
       },
       (error) => {
+        clearTimeout(syncTimeout);
+        isSyncingRef.current = false;
         setIsSyncing(false);
+
+        if (error.name === 'AbortError' || error.message?.includes('aborted') || error.code === 'cancelled') {
+          return;
+        }
+
         if (error.code === 'permission-denied') {
-          setSyncError("Firebase Permission Denied");
+          if (error.message?.includes('API has not been used')) {
+            setSyncError("Cloud API Disabled - Enable in Console");
+          } else {
+            setSyncError("Permission Denied - Check Firestore Rules");
+          }
         } else if (error.code === 'placeholder-config') {
           setSyncError("Firebase Configuration Required");
         } else {
@@ -65,14 +106,10 @@ const App: React.FC = () => {
       }
     );
 
-    getInitialData().then(existingData => {
-      if (existingData) {
-        setData(existingData);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(existingData));
-      }
-    }).catch(() => {});
-
-    return () => unsubscribe();
+    return () => {
+      clearTimeout(syncTimeout);
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -91,6 +128,7 @@ const App: React.FC = () => {
     setData(newData);
     localStorage.setItem(STORAGE_KEY, JSON.stringify(newData));
     saveChitData(newData).catch((err) => {
+      if (err.name === 'AbortError' || err.message?.includes('aborted') || err.code === 'cancelled') return;
       console.warn("Cloud save pending (Offline/Error):", err.message);
     });
   };
@@ -147,14 +185,22 @@ const App: React.FC = () => {
   };
 
   if (!auth.isAuthenticated) {
-    return <Login data={data} onLogin={handleLogin} onImportFile={() => {}} />;
+    return (
+      <Login
+        data={data}
+        onLogin={handleLogin}
+        onImportFile={() => {}}
+        isSyncing={isSyncing}
+        syncError={syncError}
+      />
+    );
   }
 
   return (
-    <Layout 
-      activeTab={activeTab} 
-      onTabChange={setActiveTab} 
-      userRole={auth.role} 
+    <Layout
+      activeTab={activeTab}
+      onTabChange={setActiveTab}
+      userRole={auth.role}
       userName={auth.userName}
       onLogout={handleLogout}
     >
@@ -190,7 +236,7 @@ const App: React.FC = () => {
               <RefreshCw className="w-4 h-4" />
             </button>
           </div>
-          
+
           <div className="p-8 space-y-6">
             <div className="flex items-start space-x-4">
               <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center font-black text-slate-500 text-xs flex-shrink-0">1</div>
@@ -227,26 +273,26 @@ const App: React.FC = () => {
 
       {activeTab === 'dashboard' && <Dashboard data={data} />}
       {activeTab === 'payments' && (
-        <PaymentGrid 
-          data={data} 
+        <PaymentGrid
+          data={data}
           userRole={auth.role}
-          onUpdateStatus={handleUpdatePayment} 
+          onUpdateStatus={handleUpdatePayment}
           onUpdateAuction={handleUpdateAuction}
         />
       )}
       {activeTab === 'members' && (
-        <MemberList 
-          members={data.members} 
+        <MemberList
+          members={data.members}
           userRole={auth.role}
-          onAddMember={handleAddMember} 
+          onAddMember={handleAddMember}
           onUpdateMember={handleUpdateMember}
           onDeleteMember={handleDeleteMember}
         />
       )}
       {activeTab === 'ai' && <AIInsights data={data} userRole={auth.role} />}
       {activeTab === 'settings' && (
-        <ChitSettings 
-          config={data.config} 
+        <ChitSettings
+          config={data.config}
           data={data}
           userRole={auth.role}
           onUpdateConfig={handleUpdateConfig}
@@ -258,5 +304,4 @@ const App: React.FC = () => {
   );
 };
 
-// Fix: Module '"file:///App"' has no default export.
 export default App;

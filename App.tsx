@@ -32,11 +32,17 @@ const INITIAL_DATA: AppData = {
 
 const App: React.FC = () => {
   const [data, setData] = useState<AppData>(() => {
+    // Always load from local storage instantly — no waiting for Firebase
     const local = localStorage.getItem(STORAGE_KEY);
     return local ? JSON.parse(local) : INITIAL_DATA;
   });
-  const [isSyncing, setIsSyncing] = useState(true);
+
+  // FIX: Start isSyncing as FALSE so login page shows immediately
+  // The cloud sync happens silently in the background
+  const [isSyncing, setIsSyncing] = useState(false);
   const [syncError, setSyncError] = useState<string | null>(null);
+  const [cloudReady, setCloudReady] = useState(false);
+
   const [auth, setAuth] = useState<AuthState>(() => {
     const savedAuth = localStorage.getItem('chittrack_auth');
     return savedAuth ? JSON.parse(savedAuth) : { isAuthenticated: false, role: UserRole.MEMBER, phoneNumber: '' };
@@ -44,40 +50,32 @@ const App: React.FC = () => {
 
   const [activeTab, setActiveTab] = useState<'dashboard' | 'payments' | 'members' | 'ai' | 'settings'>('dashboard');
 
-  // FIX #5: Use a ref to track syncing state inside setTimeout to avoid
-  // stale closure bug where isSyncing always reads its initial value.
-  const isSyncingRef = useRef(true);
+  const isSyncingRef = useRef(false);
 
   useEffect(() => {
-    isSyncingRef.current = true;
-    setIsSyncing(true);
-
-    // Safety timeout: If cloud doesn't respond in 8s, stop the spinner
+    // Background sync — does NOT block login or UI
     const syncTimeout = setTimeout(() => {
       if (isSyncingRef.current) {
         isSyncingRef.current = false;
         setIsSyncing(false);
         setSyncError("Cloud slow - using local data");
       }
-    }, 8000);
+    }, 10000);
 
-    // FIX #2: Remove the separate getInitialData() call that was causing a
-    // race condition. onSnapshot already fires once with the current document
-    // state, so calling getInitialData() in parallel caused data overwrites.
     const unsubscribe = subscribeToChitData(
       (newData) => {
         clearTimeout(syncTimeout);
         isSyncingRef.current = false;
         setIsSyncing(false);
         setSyncError(null);
+        setCloudReady(true);
 
-        // FIX #3: newData can now be null when the Firestore doc doesn't exist yet
-        // (fresh project). In that case, keep local data and save it up to the cloud.
         if (newData !== null) {
+          // Only update if cloud data is newer/different
           setData(newData);
           localStorage.setItem(STORAGE_KEY, JSON.stringify(newData));
         } else {
-          // Cloud is reachable but doc is empty — push local data up
+          // Cloud doc is empty — push local data up to Firestore
           const local = localStorage.getItem(STORAGE_KEY);
           const localData: AppData = local ? JSON.parse(local) : INITIAL_DATA;
           saveChitData(localData).catch(console.warn);
@@ -87,10 +85,9 @@ const App: React.FC = () => {
         clearTimeout(syncTimeout);
         isSyncingRef.current = false;
         setIsSyncing(false);
+        setCloudReady(false);
 
-        if (error.name === 'AbortError' || error.message?.includes('aborted') || error.code === 'cancelled') {
-          return;
-        }
+        if (error.name === 'AbortError' || error.message?.includes('aborted') || error.code === 'cancelled') return;
 
         if (error.code === 'permission-denied') {
           if (error.message?.includes('API has not been used')) {
@@ -116,13 +113,8 @@ const App: React.FC = () => {
     localStorage.setItem('chittrack_auth', JSON.stringify(auth));
   }, [auth]);
 
-  const handleLogin = (newAuth: AuthState) => {
-    setAuth(newAuth);
-  };
-
-  const handleLogout = () => {
-    setAuth({ isAuthenticated: false, role: UserRole.MEMBER, phoneNumber: '' });
-  };
+  const handleLogin = (newAuth: AuthState) => setAuth(newAuth);
+  const handleLogout = () => setAuth({ isAuthenticated: false, role: UserRole.MEMBER, phoneNumber: '' });
 
   const safeSave = (newData: AppData) => {
     setData(newData);
@@ -236,31 +228,27 @@ const App: React.FC = () => {
               <RefreshCw className="w-4 h-4" />
             </button>
           </div>
-
           <div className="p-8 space-y-6">
             <div className="flex items-start space-x-4">
               <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center font-black text-slate-500 text-xs flex-shrink-0">1</div>
               <div>
                 <p className="text-sm font-black text-slate-900 uppercase italic">Configure your own Firebase Project</p>
-                <p className="text-xs font-medium text-slate-500 mt-1">The current app is using placeholder credentials. You must update `services/firebase.ts` with your own API Key and Project ID.</p>
+                <p className="text-xs font-medium text-slate-500 mt-1">Update `services/firebase.ts` with your own API Key and Project ID.</p>
                 <a href="https://console.firebase.google.com/" target="_blank" rel="noreferrer" className="inline-flex items-center space-x-1 text-xs font-black text-indigo-600 uppercase tracking-widest mt-3 hover:underline">
                   <span>Open Firebase Console</span>
                   <ExternalLink className="w-3 h-3" />
                 </a>
               </div>
             </div>
-
             <div className="flex items-start space-x-4 border-t border-slate-50 pt-6">
               <div className="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center font-black text-slate-500 text-xs flex-shrink-0">2</div>
               <div>
                 <p className="text-sm font-black text-slate-900 uppercase italic">Update Firestore Rules</p>
-                <p className="text-xs font-medium text-slate-500 mt-1">Ensure your Firestore Security Rules allow public read/write for testing:</p>
                 <div className="mt-3 p-4 bg-slate-900 rounded-xl font-mono text-[10px] text-emerald-400 overflow-x-auto">
                   allow read, write: if true;
                 </div>
               </div>
             </div>
-
             <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 flex items-center space-x-3">
               <AlertTriangle className="w-5 h-5 text-amber-600 flex-shrink-0" />
               <p className="text-[10px] font-black text-amber-800 uppercase tracking-widest leading-relaxed">
@@ -273,32 +261,14 @@ const App: React.FC = () => {
 
       {activeTab === 'dashboard' && <Dashboard data={data} />}
       {activeTab === 'payments' && (
-        <PaymentGrid
-          data={data}
-          userRole={auth.role}
-          onUpdateStatus={handleUpdatePayment}
-          onUpdateAuction={handleUpdateAuction}
-        />
+        <PaymentGrid data={data} userRole={auth.role} onUpdateStatus={handleUpdatePayment} onUpdateAuction={handleUpdateAuction} />
       )}
       {activeTab === 'members' && (
-        <MemberList
-          members={data.members}
-          userRole={auth.role}
-          onAddMember={handleAddMember}
-          onUpdateMember={handleUpdateMember}
-          onDeleteMember={handleDeleteMember}
-        />
+        <MemberList members={data.members} userRole={auth.role} onAddMember={handleAddMember} onUpdateMember={handleUpdateMember} onDeleteMember={handleDeleteMember} />
       )}
       {activeTab === 'ai' && <AIInsights data={data} userRole={auth.role} />}
       {activeTab === 'settings' && (
-        <ChitSettings
-          config={data.config}
-          data={data}
-          userRole={auth.role}
-          onUpdateConfig={handleUpdateConfig}
-          onLogout={handleLogout}
-          onImportFile={() => {}}
-        />
+        <ChitSettings config={data.config} data={data} userRole={auth.role} onUpdateConfig={handleUpdateConfig} onLogout={handleLogout} onImportFile={() => {}} />
       )}
     </Layout>
   );
